@@ -1,15 +1,19 @@
+from dataset import DetectionAsClassificationDataset
+from torchvision import transforms
+from torch.utils.data import DataLoader
+import timm
 import torch
 import torch.nn as nn
-import timm
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from dataset import DetectionAsClassificationDataset  # your custom Dataset
+
 
 def main():
+    # -------------------------
+    # 1. Device
+    # -------------------------
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # -------------------------
-    # 1. Transforms
+    # 2. Transforms
     # -------------------------
     train_transforms = transforms.Compose([
         transforms.Resize((224, 224)),
@@ -19,15 +23,16 @@ def main():
     ])
 
     # -------------------------
-    # 2. Dataset
+    # 3. Dataset
     # -------------------------
-    # Optional: map VOC class names to integers
-    class_map = {'Big_mammal':0, 'Bird':1, 'Frog':2, 'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6}
+    class_map = {
+        'Big_mammal':0, 'Bird':1, 'Frog':2,
+        'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6
+    }
 
     train_dataset = DetectionAsClassificationDataset(
         img_dir='sawit/data/images/train',
-        label_dir=r'.\sawit\data\labels\VOC_format',
-        #label_type='voc',  # or 'yolo' if using YOLO TXT labels
+        label_dir='./sawit/data/labels/VOC_format',  # fixed path
         transforms=train_transforms,
         class_map=class_map
     )
@@ -35,7 +40,7 @@ def main():
     train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=4)
 
     # -------------------------
-    # 3. Model
+    # 4. Model
     # -------------------------
     num_classes = len(class_map)
     model = timm.create_model(
@@ -46,24 +51,19 @@ def main():
     )
     model = model.to(device)
 
-    # Freeze backbone, train only head
+    # Freeze backbone
     for name, param in model.named_parameters():
-        if "head" in name:
-            param.requires_grad = True
-        else:
-            param.requires_grad = False
+        param.requires_grad = "head" in name
 
     # -------------------------
-    # 4. Loss and optimizer
+    # 5. Loss & optimizer
     # -------------------------
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.AdamW(
-        filter(lambda p: p.requires_grad, model.parameters()),
-        lr=1e-4, weight_decay=1e-4
-    )
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
+                                lr=1e-4, weight_decay=1e-4)
 
     # -------------------------
-    # 5. Training loop
+    # 6. Training loop
     # -------------------------
     for epoch in range(5):
         model.train()
@@ -83,10 +83,11 @@ def main():
         print(f"Epoch {epoch+1} complete, loss = {epoch_loss:.4f}")
 
     # -------------------------
-    # 6. Save model
+    # 7. Save model
     # -------------------------
     torch.save(model.state_dict(), "swin_model.pth")
     print("Model saved as swin_model.pth")
+
 
 if __name__ == "__main__":
     main()
