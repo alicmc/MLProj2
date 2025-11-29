@@ -36,11 +36,11 @@ def main():
                             pretrained=False,
                             num_classes=num_classes,
                             global_pool='avg')
-    model.load_state_dict(torch.load("best_swin_model.pth", map_location=device))
+    model.load_state_dict(torch.load("best_swin_model_no_frog.pth", map_location=device))
     model.to(device)
     model.eval()
     
-    print(f"Testing on {len(test_dataset)} samples...")
+    print(f"Testing NO-FROG trained model on {len(test_dataset)} samples...")
     print(f"Using device: {device}\n")
 
     all_preds = []
