@@ -1,6 +1,6 @@
 from dataset import DetectionAsClassificationDataset
 from torchvision import transforms
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 import timm
 import torch
 import torch.nn as nn
@@ -10,7 +10,7 @@ def main():
     # -------------------------
     # HYPERPARAMETERS - Adjust these to improve accuracy
     # -------------------------
-    EPOCHS = 20              # Increase from 5 to 20 for better training
+    EPOCHS = 50              # Increase from 5 to 50 for better training
     BATCH_SIZE = 16          # Reduce from 32 to 16 for better gradient updates
     LEARNING_RATE = 5e-5     # Lower learning rate for fine-tuning
     WEIGHT_DECAY = 1e-4      # Regularization strength
@@ -44,6 +44,12 @@ def main():
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
     ])
+
+    val_transforms = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+    ])
     print("Transforms defined.")
     # -------------------------
     # 3. Dataset
@@ -53,14 +59,23 @@ def main():
         'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6
     }
 
-    train_dataset = DetectionAsClassificationDataset(
+    full_dataset = DetectionAsClassificationDataset(
         img_dir='sawit/data/images/train',
-        label_dir='./sawit/data/labels/VOC_format',  # fixed path
+        label_dir='./sawit/data/labels/VOC_format',
         transforms=train_transforms,
         class_map=class_map
     )
 
+    # Split dataset into train and validation
+    val_size = int(0.2 * len(full_dataset))
+    train_size = len(full_dataset) - val_size
+    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+
+    # Apply validation transforms
+    val_dataset.dataset.transforms = val_transforms
+
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
     print(f"Dataset and DataLoader created. Training samples: {len(train_dataset)}")
     # -------------------------
     # 4. Model
@@ -83,19 +98,20 @@ def main():
     # -------------------------
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-                                lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+                                  lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
     
     # Learning rate scheduler - reduces LR when loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2, verbose=True
+        optimizer, mode='min', factor=0.5, patience=2
     )
     
     print(f"Loss function and optimizer set. LR={LEARNING_RATE}")
     # -------------------------
-    # 6. Training loop
+    # 6. Training loop with early stopping
     # -------------------------
-    best_loss = float('inf')
-    
+    patience = 5
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
     for epoch in range(EPOCHS):
         # Unfreeze backbone layers after initial training
         if epoch == UNFREEZE_AFTER_EPOCH:
@@ -144,19 +160,40 @@ def main():
         
         # Update learning rate based on loss
         scheduler.step(epoch_loss)
-        
-        # Save best model
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
-            torch.save(model.state_dict(), "swin_model_best.pth")
-            print(f"✓ Best model saved (loss: {best_loss:.4f})")
+        # ---- Validation ----
+        model.eval()
+        val_loss = 0.0
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in val_loader:
+                images, labels = images.to(device), labels.to(device)
+                preds = model(images)
+                loss = criterion(preds, labels)
+                val_loss += loss.item() * images.size(0)
+                
+                _, predicted = torch.max(preds, 1)
+                correct += (predicted == labels).sum().item()
+                total += labels.size(0)
 
-    # -------------------------
-    # 7. Save final model
-    # -------------------------
-    torch.save(model.state_dict(), "swin_model_final.pth")
-    print("\nFinal model saved as swin_model_final.pth")
-    print(f"Best model saved as swin_model_best.pth (loss: {best_loss:.4f})")
+        val_loss /= len(val_loader.dataset)
+        val_acc = correct / total
+
+        print(f"Epoch {epoch+1}: Train Loss = {epoch_loss:.4f}, Val Loss = {val_loss:.4f}, Val Acc = {val_acc:.4f}")
+
+        # ---- Early Stopping Check ----
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), "best_swin_model.pth")
+            print(f"✓ Best model saved (loss: {best_val_loss:.4f})")
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print(f"Early stopping triggered after {epoch+1} epochs.")
+                break
+
+    print("Training complete. Best model saved as best_swin_model.pth")
 
 
 if __name__ == "__main__":
