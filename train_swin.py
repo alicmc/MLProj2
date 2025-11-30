@@ -4,13 +4,16 @@ from torch.utils.data import DataLoader, random_split
 import timm
 import torch
 import torch.nn as nn
+import os
+from glob import glob
+from sklearn.model_selection import train_test_split
 
 
 def main():
     # -------------------------
     # HYPERPARAMETERS - Adjust these to improve accuracy
     # -------------------------
-    EPOCHS = 50              # Increase from 5 to 50 for better training
+    EPOCHS = 30              # Increase from 5 to 50 for better training
     BATCH_SIZE = 16          # Reduce from 32 to 16 for better gradient updates
     LEARNING_RATE = 5e-5     # Lower learning rate for fine-tuning
     WEIGHT_DECAY = 1e-4      # Regularization strength
@@ -59,20 +62,45 @@ def main():
         'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6
     }
 
-    full_dataset = DetectionAsClassificationDataset(
-        img_dir='sawit/data/images/train',
-        label_dir='./sawit/data/labels/VOC_format',
+    # full_dataset = DetectionAsClassificationDataset(
+    #     img_dir='sawit/data/images/train',
+    #     label_dir='./sawit/data/labels/VOC_format',
+    #     transforms=train_transforms,
+    #     class_map=class_map
+    # )
+
+    # img_paths = sorted(glob("sawit/data/images/train/*.jpeg"))
+
+    # train_paths, val_paths = train_test_split(
+    #     img_paths,
+    #     test_size=0.2,
+    #     random_state=42,
+    #     shuffle=True
+    # )
+
+    train_dataset = DetectionAsClassificationDataset(
+        img_dir="sawit/data/images/train/part1",
+        label_dir="./sawit/data/labels/VOC_format",
         transforms=train_transforms,
         class_map=class_map
     )
 
-    # Split dataset into train and validation
-    val_size = int(0.2 * len(full_dataset))
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    val_dataset = DetectionAsClassificationDataset(
+        img_dir="sawit/data/images/train/part2",
+        label_dir="./sawit/data/labels/VOC_format",
+        transforms=val_transforms,
+        class_map=class_map
+    )
+
+
+
+    # # Split dataset into train and validation
+    # val_size = int(0.2 * len(full_dataset))
+    # train_size = len(full_dataset) - val_size
+    # train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
     # Apply validation transforms
-    val_dataset.dataset.transforms = val_transforms
+    # val_dataset.dataset.transforms = val_transforms
 
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)

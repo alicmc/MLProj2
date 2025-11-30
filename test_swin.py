@@ -34,7 +34,7 @@ def main():
                             pretrained=False,
                             num_classes=num_classes,
                             global_pool='avg')
-    model.load_state_dict(torch.load("swin_model.pth", map_location=device))
+    model.load_state_dict(torch.load("best_swin_model.pth", map_location=device))
     model.to(device)
     model.eval()
 
