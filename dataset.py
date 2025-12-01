@@ -44,23 +44,71 @@ class DetectionAsClassificationDataset(Dataset):
         except:
             return None
 
+    def _parse_label_with_box(self, label_path):
+        """
+        Format: class_name x_min y_min x_max y_max
+        """
+        try:
+            with open(label_path, "r") as f:
+                line = f.readline().strip()
+
+            if not line:
+                return None, None
+
+            parts = line.split()
+            class_name = parts[0]
+            x1, y1, x2, y2 = map(int, parts[1:])
+
+            if self.class_map and class_name in self.class_map:
+                cls = self.class_map[class_name]
+            else:
+                return None, None
+
+            return cls, (x1, y1, x2, y2)
+
+        except:
+            return None, None
+
+
+    # def __getitem__(self, idx):
+    #     img_path = self.img_paths[idx]
+
+    #     # Load image
+    #     img = Image.open(img_path).convert("RGB")
+
+    #     # Find matching label file
+    #     base = os.path.splitext(os.path.basename(img_path))[0]
+    #     label_path = os.path.join(self.label_dir, base + ".txt")
+
+    #     # Parse label
+    #     label = self._parse_simple_label(label_path)
+
+    #     if label is None:s
+    #         label = 0  # fallback, but should rarely happen
+
+    #     if self.transforms:
+    #         img = self.transforms(img)
+
+    #     return img, label
+
     def __getitem__(self, idx):
         img_path = self.img_paths[idx]
+        img = Image.open(img_path).convert('RGB')
 
-        # Load image
-        img = Image.open(img_path).convert("RGB")
-
-        # Find matching label file
         base = os.path.splitext(os.path.basename(img_path))[0]
         label_path = os.path.join(self.label_dir, base + ".txt")
 
-        # Parse label
-        label = self._parse_simple_label(label_path)
+        cls, box = self._parse_label_with_box(label_path)
 
-        if label is None:
-            label = 0  # fallback, but should rarely happen
+        if cls is None or box is None:
+            raise ValueError(f"Invalid label file: {label_path}")
+
+        x1, y1, x2, y2 = box
+
+        # Crop to bounding box
+        crop = img.crop((x1, y1, x2, y2))
 
         if self.transforms:
-            img = self.transforms(img)
+            crop = self.transforms(crop)
 
-        return img, label
+        return crop, cls
