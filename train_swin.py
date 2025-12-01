@@ -62,21 +62,12 @@ def main():
         'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6
     }
 
-    # full_dataset = DetectionAsClassificationDataset(
-    #     img_dir='sawit/data/images/train',
-    #     label_dir='./sawit/data/labels/VOC_format',
-    #     transforms=train_transforms,
-    #     class_map=class_map
-    # )
-
-    # img_paths = sorted(glob("sawit/data/images/train/*.jpeg"))
-
-    # train_paths, val_paths = train_test_split(
-    #     img_paths,
-    #     test_size=0.2,
-    #     random_state=42,
-    #     shuffle=True
-    # )
+    full_dataset = DetectionAsClassificationDataset(
+        img_dir='sawit/data/images/train',
+        label_dir='./sawit/data/labels/VOC_format',
+        transforms=train_transforms,
+        class_map=class_map
+    )
 
     train_dataset = DetectionAsClassificationDataset(
         img_dir="sawit/data/images/train/part1",
@@ -92,18 +83,9 @@ def main():
         class_map=class_map
     )
 
-
-
-    # # Split dataset into train and validation
-    # val_size = int(0.2 * len(full_dataset))
-    # train_size = len(full_dataset) - val_size
-    # train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
-
-    # Apply validation transforms
-    # val_dataset.dataset.transforms = val_transforms
-
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+    final_loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
     print(f"Dataset and DataLoader created. Training samples: {len(train_dataset)}")
     # -------------------------
     # 4. Model
@@ -140,6 +122,7 @@ def main():
     patience = 5
     best_val_loss = float('inf')
     epochs_no_improve = 0
+    best_epoch = 1
     for epoch in range(EPOCHS):
         # Unfreeze backbone layers after initial training
         if epoch == UNFREEZE_AFTER_EPOCH:
@@ -167,7 +150,7 @@ def main():
             loss.backward()
             
             # Gradient clipping to prevent exploding gradients
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
             
             optimizer.step()
             
@@ -211,9 +194,9 @@ def main():
 
         # ---- Early Stopping Check ----
         if val_loss < best_val_loss:
+            best_epoch = epoch
             best_val_loss = val_loss
-            torch.save(model.state_dict(), "best_swin_model.pth")
-            print(f"✓ Best model saved (loss: {best_val_loss:.4f})")
+            print(f"✓ Best number of epochs: {best_epoch:.4f})")
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1
@@ -221,7 +204,88 @@ def main():
                 print(f"Early stopping triggered after {epoch+1} epochs.")
                 break
 
-    print("Training complete. Best model saved as best_swin_model.pth")
+    # 7. Remake Model
+    final_model = timm.create_model(
+        "swin_base_patch4_window7_224",
+        pretrained=True,
+        num_classes=num_classes,
+        global_pool='avg'
+    )
+    final_model = final_model.to(device)
+    print("final_Model created.")
+    # Freeze backbone initially (will unfreeze later)
+    for name, param in final_model.named_parameters():
+        param.requires_grad = name.startswith("head")
+        
+    # 8. Loss & optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, final_model.parameters()),
+                                  lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    
+    # Learning rate scheduler - reduces LR when loss plateaus
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=2
+    )
+    print(f"Loss function and optimizer set. LR={LEARNING_RATE}")
+
+    # 9. Traning final model using best epoch
+    for epoch in range(best_epoch):
+        # Unfreeze backbone layers after initial training
+        if epoch == UNFREEZE_AFTER_EPOCH:
+            print(f"\n>>> Unfreezing backbone layers at epoch {epoch+1}")
+            
+            for param in final_model.parameters():
+                param.requires_grad = True
+
+            optimizer = torch.optim.AdamW(
+                final_model.parameters(),
+                lr=LEARNING_RATE * 0.1,
+                weight_decay=WEIGHT_DECAY
+            )
+        
+        final_model.train()
+        running_loss = 0.0
+        correct = 0
+        total = 0
+        
+        for i, (images, labels) in enumerate(final_loader):
+            images, labels = images.to(device), labels.to(device)
+            
+            optimizer.zero_grad()
+            preds = final_model(images)
+            loss = criterion(preds, labels)
+            loss.backward()
+            
+            # Gradient clipping to prevent exploding gradients
+            torch.nn.utils.clip_grad_norm_(final_model.parameters(), max_norm=5.0)
+            
+            optimizer.step()
+            
+            running_loss += loss.item() * images.size(0)
+            _, predicted = torch.max(preds, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+            
+            if (i + 1) % 10 == 0:
+                print(f"Epoch [{epoch+1}/{best_epoch}], Step [{i+1}/{len(final_loader)}], Loss: {loss.item():.4f}")
+        
+        epoch_loss = running_loss / len(final_loader.dataset)
+        epoch_acc = 100 * correct / total
+        print(f"\n{'='*60}")
+        print(f"Epoch {epoch+1}/{best_epoch} complete")
+        print(f"Average Loss: {epoch_loss:.4f} | Training Accuracy: {epoch_acc:.2f}%")
+        print(f"{'='*60}\n")
+        
+        # Update learning rate based on loss
+        scheduler.step(epoch_loss)
+        final_model.eval()
+
+        print(f"Epoch {epoch+1}: Train Loss = {epoch_loss:.4f}")
+
+
+    torch.save(final_model.state_dict(), "swin_model.pth")
+    print(f"✓ Best model saved (loss: {epoch_loss:.4f})")
+    print("Training complete. Best model saved as swin_model.pth")
 
 
 if __name__ == "__main__":
