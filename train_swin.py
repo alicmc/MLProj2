@@ -11,7 +11,7 @@ def main():
     # -------------------------
     # HYPERPARAMETERS - Adjusted to reduce overfitting and prioritize classes
     # -------------------------
-    EPOCHS = 12               # Reduced to prevent overfitting
+    EPOCHS = 25               # Reduced to prevent overfitting
     BATCH_SIZE = 16          # Reduce from 32 to 16 for better gradient updates
     LEARNING_RATE = 3e-5     # Even lower LR for stability
     WEIGHT_DECAY = 5e-4      # Increased regularization to reduce overfitting
