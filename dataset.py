@@ -62,6 +62,8 @@ class DetectionAsClassificationDataset(Dataset):
             if self.class_map and class_name in self.class_map:
                 cls = self.class_map[class_name]
             else:
+                print(class_name)
+                print(self.class_map)
                 return None, None
 
             return cls, (x1, y1, x2, y2)
@@ -96,11 +98,13 @@ class DetectionAsClassificationDataset(Dataset):
         img = Image.open(img_path).convert('RGB')
 
         base = os.path.splitext(os.path.basename(img_path))[0]
-        label_path = os.path.join(self.label_dir, base + ".txt")
+        label_path = os.path.normpath(os.path.join(self.label_dir, base + ".txt"))
+
 
         cls, box = self._parse_label_with_box(label_path)
 
         if cls is None or box is None:
+            print(cls, box)
             raise ValueError(f"Invalid label file: {label_path}")
 
         x1, y1, x2, y2 = box

@@ -4,26 +4,19 @@ from torch.utils.data import DataLoader, random_split
 import timm
 import torch
 import torch.nn as nn
+import constants
+from datetime import datetime
 
+BATCH_SIZE = 16       
+WEIGHT_DECAY = 1e-4      
+UNFREEZE_AFTER_EPOCH = 5 
 
-def main():
-    # -------------------------
-    # HYPERPARAMETERS - Adjust these to improve accuracy
-    # -------------------------
-    EPOCHS = 50              # Increase from 5 to 50 for better training
-    BATCH_SIZE = 16          # Reduce from 32 to 16 for better gradient updates
-    LEARNING_RATE = 5e-5     # Lower learning rate for fine-tuning
-    WEIGHT_DECAY = 1e-4      # Regularization strength
-    UNFREEZE_AFTER_EPOCH = 5 # Unfreeze backbone layers after this epoch
-    
-    # -------------------------
-    # 1. Device
-    # -------------------------
+def train_model(validation=True, epochs=25, learning_rate=5e-5):          
+    # Use GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print("Using device:", device)
-    # -------------------------
-    # 2. Enhanced Transforms with more augmentation
-    # -------------------------
+
+    # Defining transforms to augment test set
     train_transforms = transforms.Compose([
         transforms.Resize((256, 256)),           # Resize larger
         transforms.RandomCrop((224, 224)),       # Then random crop
@@ -51,36 +44,32 @@ def main():
         transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
     ])
     print("Transforms defined.")
-    # -------------------------
-    # 3. Dataset
-    # -------------------------
-    class_map = {
-        'Big_mammal':0, 'Bird':1, 'Frog':2,
-        'Lizard':3, 'Scorpion':4, 'Small_mammal':5, 'Spider':6
-    }
 
     full_dataset = DetectionAsClassificationDataset(
         img_dir='sawit/data/images/train',
         label_dir='./sawit/data/labels/VOC_format',
         transforms=train_transforms,
-        class_map=class_map
+        class_map=constants.CLASS_MAP
     )
 
-    # Split dataset into train and validation
-    val_size = int(0.2 * len(full_dataset))
-    train_size = len(full_dataset) - val_size
-    train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
+    if validation:
+        # Split dataset into train and validation
+        val_size = int(0.2 * len(full_dataset))     # use 80/20 split
+        train_size = len(full_dataset) - val_size
+        train_dataset, val_dataset = random_split(full_dataset, [train_size, val_size])
 
-    # Apply validation transforms
-    val_dataset.dataset.transforms = val_transforms
+        # Apply validation transforms
+        val_dataset.dataset.transforms = val_transforms
 
-    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
-    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
-    print(f"Dataset and DataLoader created. Training samples: {len(train_dataset)}")
-    # -------------------------
+        train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+        val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+        print(f"Dataset and DataLoader created. Training samples: {len(train_dataset)}")
+    else:
+        train_loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+        print(f"Dataset and DataLoader created. Training samples: {len(full_dataset)}")
+
     # 4. Model
-    # -------------------------
-    num_classes = len(class_map)
+    num_classes = len(constants.CLASS_MAP)
     model = timm.create_model(
         "swin_base_patch4_window7_224",
         pretrained=True,
@@ -93,26 +82,20 @@ def main():
     for name, param in model.named_parameters():
         param.requires_grad = "head" in name
 
-    # -------------------------
     # 5. Loss & optimizer
-    # -------------------------
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),
-                                  lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+                                  lr=learning_rate, weight_decay=WEIGHT_DECAY)
     
     # Learning rate scheduler - reduces LR when loss plateaus
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', factor=0.5, patience=2
     )
     
-    print(f"Loss function and optimizer set. LR={LEARNING_RATE}")
-    # -------------------------
-    # 6. Training loop with early stopping
-    # -------------------------
-    patience = 5
-    best_val_loss = float('inf')
-    epochs_no_improve = 0
-    for epoch in range(EPOCHS):
+    print(f"Loss function and optimizer set. LR={learning_rate}")
+
+    # Validation training loop
+    for epoch in range(epochs):
         # Unfreeze backbone layers after initial training
         if epoch == UNFREEZE_AFTER_EPOCH:
             print(f"\n>>> Unfreezing backbone layers at epoch {epoch+1}")
@@ -121,8 +104,12 @@ def main():
             # Recreate optimizer with all parameters and lower LR
             optimizer = torch.optim.AdamW(
                 model.parameters(), 
-                lr=LEARNING_RATE/10,  # Lower LR for fine-tuning
+                lr=learning_rate/10,  # Lower LR for fine-tuning
                 weight_decay=WEIGHT_DECAY
+            )
+            # **Create a new scheduler linked to the new optimizer**
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode='min', factor=0.5, patience=2
             )
         
         model.train()
@@ -149,52 +136,105 @@ def main():
             correct += (predicted == labels).sum().item()
             
             if (i + 1) % 10 == 0:
-                print(f"Epoch [{epoch+1}/{EPOCHS}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
+                print(f"Epoch [{epoch+1}/{epochs}], Step [{i+1}/{len(train_loader)}], Loss: {loss.item():.4f}")
         
         epoch_loss = running_loss / len(train_loader.dataset)
         epoch_acc = 100 * correct / total
         print(f"\n{'='*60}")
-        print(f"Epoch {epoch+1}/{EPOCHS} complete")
+        print(f"Epoch {epoch+1}/{epochs} complete")
         print(f"Average Loss: {epoch_loss:.4f} | Training Accuracy: {epoch_acc:.2f}%")
         print(f"{'='*60}\n")
         
-        # Update learning rate based on loss
-        scheduler.step(epoch_loss)
-        # ---- Validation ----
         model.eval()
-        val_loss = 0.0
-        correct = 0
-        total = 0
-        with torch.no_grad():
-            for images, labels in val_loader:
-                images, labels = images.to(device), labels.to(device)
-                preds = model(images)
-                loss = criterion(preds, labels)
-                val_loss += loss.item() * images.size(0)
-                
-                _, predicted = torch.max(preds, 1)
-                correct += (predicted == labels).sum().item()
-                total += labels.size(0)
+        print(f"Epoch {epoch+1}: Train Loss = {epoch_loss:.4f}")
 
-        val_loss /= len(val_loader.dataset)
-        val_acc = correct / total
+        # Validation
+        if(validation):
+            val_loss = 0.0
+            correct = 0
+            total = 0
+            with torch.no_grad():
+                for images, labels in val_loader:
+                    images, labels = images.to(device), labels.to(device)
+                    preds = model(images)
+                    loss = criterion(preds, labels)
+                    val_loss += loss.item() * images.size(0)
+                    
+                    _, predicted = torch.max(preds, 1)
+                    correct += (predicted == labels).sum().item()
+                    total += labels.size(0)
 
-        print(f"Epoch {epoch+1}: Train Loss = {epoch_loss:.4f}, Val Loss = {val_loss:.4f}, Val Acc = {val_acc:.4f}")
+            val_loss /= len(val_loader.dataset)
+            val_acc = correct / total
 
-        # ---- Early Stopping Check ----
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), "best_swin_model.pth")
-            print(f"✓ Best model saved (loss: {best_val_loss:.4f})")
-            epochs_no_improve = 0
+            print(f"Epoch {epoch+1}: Val Loss = {val_loss:.4f}, Val Acc = {val_acc:.4f}")
+
+        # Update learning rate based on loss
+        if validation:
+            scheduler.step(val_loss)  # step on validation loss
         else:
-            epochs_no_improve += 1
-            if epochs_no_improve >= patience:
-                print(f"Early stopping triggered after {epoch+1} epochs.")
-                break
+            scheduler.step(train_loss)  # only if no val set exists
 
-    print("Training complete. Best model saved as best_swin_model.pth")
+
+    torch.save(model.state_dict(), "swin_model.pth")
+    print("Training complete. Model saved as swin_model.pth")
+
+    # Plot and Save Loss Curves for Hyperparameter Tuning
+    if validation:
+        print("\nGenerating loss curves...")
+        
+        epochs_range = range(1, len(train_losses) + 1)
+        
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        
+        # Loss plot
+        ax1.plot(epochs_range, train_losses, 'b-o', label='Training Loss', linewidth=2, markersize=4)
+        ax1.plot(epochs_range, val_losses, 'r-s', label='Validation Loss', linewidth=2, markersize=4)
+        ax1.set_xlabel('Epoch', fontsize=12)
+        ax1.set_ylabel('Loss', fontsize=12)
+        ax1.set_title('Training and Validation Loss', fontsize=14, fontweight='bold')
+        ax1.legend(fontsize=10)
+        ax1.grid(True, alpha=0.3)
+    
+        # Accuracy plot
+        ax2.plot(epochs_range, train_accs, 'b-o', label='Training Accuracy', linewidth=2, markersize=4)
+        ax2.plot(epochs_range, val_accs, 'r-s', label='Validation Accuracy', linewidth=2, markersize=4)
+        ax2.set_xlabel('Epoch', fontsize=12)
+        ax2.set_ylabel('Accuracy', fontsize=12)
+        ax2.set_title('Training and Validation Accuracy', fontsize=14, fontweight='bold')
+        ax2.legend(fontsize=10)
+        ax2.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        now = datetime.now()
+        timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
+
+        plt.savefig(os.path.join("charts", f"training_curves_{timestamp}.png"), dpi=300, bbox_inches='tight')
+        print("Training curves saved as 'training_curves.png'")
+        plt.show()
+        
+        print(f"\n{'='*60}")
+        print("FINAL RESULTS")
+        print(f"{'='*60}")
+        print(f"  Training Loss: {train_losses[-1]:.4f} | Accuracy: {train_accs[-1]:.2f}%")
+        print(f"  Validation Loss: {val_losses[-1]:.4f} | Accuracy: {val_accs[-1]:.2f}%")
+        print(f"\nOverfitting Check:")
+        final_gap = train_accs[-1] - val_accs[-1]
+        if final_gap > 10:
+            print(f"  ⚠️  Overfitting: {final_gap:.1f}% accuracy gap")
+        else:
+            print(f"  ✓ Good generalization: {final_gap:.1f}% accuracy gap")
+        print(f"{'='*60}")
+        print("\nNote: Model is optimized for Frog and Small_mammal classes (2x weight)")
 
 
 if __name__ == "__main__":
-    main()
+    # Tuning learning rate hyperparameter
+    lrs_to_test = [1e-6, 5e-6, 1e-5, 5e-5, 1e-4]
+    for lr in lrs_to_test:
+        print(f"Testing LR = {lr}")
+        train_model(validation=True, epochs=3, learning_rate=lr)
+
+
+
+#train_model(validation=True, epochs=12)
