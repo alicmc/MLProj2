@@ -3,11 +3,12 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 class DetectionAsClassificationDataset(Dataset):
-    def __init__(self, img_dir, label_dir, transforms=None, class_map=None):
+    def __init__(self, img_dir, label_dir, transforms=None, class_map=None, return_path=False):
         self.img_dir = img_dir
         self.label_dir = label_dir
         self.transforms = transforms
         self.class_map = class_map
+        self.return_path = return_path
 
         # Collect image paths
         self.img_paths = []
@@ -115,4 +116,7 @@ class DetectionAsClassificationDataset(Dataset):
         if self.transforms:
             crop = self.transforms(crop)
 
-        return crop, cls
+        if self.return_path:
+            return crop, cls, img_path
+        else:
+            return crop, cls
